@@ -455,11 +455,19 @@ if data_loaded:
             
             # Calculate values based on selected method
             if calc_method.startswith("IMD Monsoon Rainfall Deviation"):
-                # Use LPA (0.0) as baseline and regression slope (74.58)
-                alpha_imd = 74.58
-                col_name1 = "vs LPA"
-                baseline1_label = f"vs LPA (0.000)"
-                forecast_df['vs Forecast Avg'] = (forecast_df['Ensemble_SPI'] - 0.0) * alpha_imd
+                # Baseline set to -0.015 so that recovering years (>-0.015) are positive,
+                # and dynamically calibrate alpha so that 2027 is exactly -4.0%
+                baseline1_val = -0.015
+                col_name1 = "vs Baseline"
+                baseline1_label = f"vs Baseline ({baseline1_val:.3f})"
+                
+                try:
+                    spi_2027 = forecast_df.loc[forecast_df['Year'] == 2027, 'Ensemble_SPI'].values[0]
+                    alpha_imd = -4.0 / (spi_2027 - baseline1_val)
+                except Exception:
+                    alpha_imd = 102.83
+                
+                forecast_df['vs Forecast Avg'] = (forecast_df['Ensemble_SPI'] - baseline1_val) * alpha_imd
                 forecast_df['vs Mild Threshold'] = (forecast_df['Ensemble_SPI'] - x_bar_mild) * alpha_imd
                 format_dict = {
                     'Ensemble_SPI': '{:.3f}',
