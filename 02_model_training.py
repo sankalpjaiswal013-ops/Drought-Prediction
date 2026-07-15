@@ -9,22 +9,10 @@ from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-# Try to import TensorFlow, fallback to sklearn if blocked by system policy
-HAS_TENSORFLOW = True
-try:
-    # Set TF log level to minimize warnings
-    import os
-    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-    from tensorflow.keras.models import Sequential
-    from tensorflow.keras.layers import Dense, Dropout, LSTM
-    from tensorflow.keras.callbacks import EarlyStopping
-except Exception as e:
-    HAS_TENSORFLOW = False
-    print("\n" + "!"*80)
-    print("WARNING: TensorFlow cannot be loaded (blocked by Windows Application Control policy).")
-    print("Falling back to Scikit-Learn MLPRegressor for MLP & LSTM surrogate modeling.")
-    print("!"*80 + "\n")
-    from sklearn.neural_network import MLPRegressor
+# TensorFlow is disabled to avoid Windows Security / Application Control policy popups.
+# Falling back to Scikit-Learn MLPRegressor for MLP & LSTM surrogate modeling.
+HAS_TENSORFLOW = False
+from sklearn.neural_network import MLPRegressor
 
 print("Starting Model Training Pipeline...")
 
