@@ -436,8 +436,8 @@ if data_loaded:
             
             # Calculate values based on selected method
             if calc_method.startswith("IMD Monsoon Rainfall Deviation"):
-                # Predicted deviation from Long Period Average (LPA)
-                forecast_df['vs Forecast Avg'] = forecast_df['Ensemble_SPI'] * alpha
+                # Predicted deviation from Forecast Avg and Mild Threshold
+                forecast_df['vs Forecast Avg'] = (forecast_df['Ensemble_SPI'] - x_bar_avg) * alpha
                 forecast_df['vs Mild Threshold'] = (forecast_df['Ensemble_SPI'] - x_bar_mild) * alpha
                 format_dict = {
                     'Ensemble_SPI': '{:.3f}',
