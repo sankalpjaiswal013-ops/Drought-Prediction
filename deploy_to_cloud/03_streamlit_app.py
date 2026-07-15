@@ -168,7 +168,10 @@ if data_loaded:
             from sklearn.ensemble import RandomForestRegressor
             
             # Train an interpretation model
-            X_interp = df[['Rainfall', 'Max_Temp', 'Soil_Moisture']]
+            feature_cols = ['Rainfall', 'Max_Temp', 'Soil_Moisture']
+            if 'RH' in df.columns:
+                feature_cols.append('RH')
+            X_interp = df[feature_cols]
             y_interp = df['SPI']
             
             interp_rf = RandomForestRegressor(n_estimators=100, max_depth=5, random_state=42)
@@ -192,6 +195,8 @@ if data_loaded:
             - **Soil Moisture** acts as the crucial memory component of the land, dictating how severe the drought actually is on the ground.
             - **Max Temperature** contributes by driving evaporation, which accelerates drought conditions.
             """)
+            if 'RH' in df.columns:
+                st.markdown("- **Relative Humidity** affects atmospheric moisture demand. Low relative humidity accelerates evapotranspiration, drawing water rapidly from both soil and vegetation.")
 
     # ---------------------------------------------------------
     # Tab 6: Decision Summary
@@ -253,13 +258,24 @@ if data_loaded:
         
         st.subheader("Input Current Week's Data (UP State Average)")
         
-        col1, col2, col3 = st.columns(3)
+        has_rh = 'RH' in df.columns
+        feature_cols = ['Rainfall', 'Max_Temp', 'Soil_Moisture']
+        
+        if has_rh:
+            col1, col2, col3, col4 = st.columns(4)
+        else:
+            col1, col2, col3 = st.columns(3)
+            
         with col1:
             live_rain = st.number_input("Rainfall (mm/week)", value=50.0, min_value=0.0, max_value=400.0)
         with col2:
             live_temp = st.number_input("Max Temp (°C)", value=35.0, min_value=20.0, max_value=50.0)
         with col3:
             live_soil = st.number_input("Soil Moisture (kg/m²)", value=300.0, min_value=100.0, max_value=600.0)
+        if has_rh:
+            with col4:
+                live_rh = st.number_input("Relative Humidity (%)", value=75.0, min_value=0.0, max_value=100.0)
+                feature_cols.append('RH')
             
         if st.button("Predict Next Week's SPI", type="primary"):
             with st.spinner("Analyzing patterns..."):
@@ -267,8 +283,8 @@ if data_loaded:
                 from sklearn.ensemble import RandomForestRegressor
                 from sklearn.preprocessing import MinMaxScaler
                 
-                # Setup dummy sequence simulating recent past + live input
-                features = df[['Rainfall', 'Max_Temp', 'Soil_Moisture']].values
+                # Setup dataset using dynamic features
+                features = df[feature_cols].values
                 target = df['SPI'].values
                 
                 # Train model
@@ -284,7 +300,10 @@ if data_loaded:
                 demo_rf.fit(X_sc, y_sc)
                 
                 # Predict
-                live_input = np.array([[live_rain, live_temp, live_soil]])
+                if has_rh:
+                    live_input = np.array([[live_rain, live_temp, live_soil, live_rh]])
+                else:
+                    live_input = np.array([[live_rain, live_temp, live_soil]])
                 live_input_sc = scaler_X.transform(live_input)
                 
                 pred_sc = demo_rf.predict(live_input_sc)
@@ -436,52 +455,66 @@ if data_loaded:
             
             # Calculate values based on selected method
             if calc_method.startswith("IMD Monsoon Rainfall Deviation"):
-                # Predicted deviation from Forecast Avg and Mild Threshold
-                forecast_df['vs Forecast Avg'] = (forecast_df['Ensemble_SPI'] - x_bar_avg) * alpha
+                baseline1 = 0.0
+                col_name1 = "vs LPA"
+                baseline1_label = f"vs LPA ({baseline1:.3f})"
+                # Predicted deviation from LPA (0) and Mild Threshold
+                forecast_df['vs Forecast Avg'] = (forecast_df['Ensemble_SPI'] - baseline1) * alpha
                 forecast_df['vs Mild Threshold'] = (forecast_df['Ensemble_SPI'] - x_bar_mild) * alpha
                 format_dict = {
                     'Ensemble_SPI': '{:.3f}',
-                    'vs Forecast Avg': '{:+.2f}%',
+                    col_name1: '{:+.2f}%',
                     'vs Mild Threshold': '{:+.2f}%'
                 }
                 y_label = "Rainfall Deviation from LPA (%)"
                 title_suffix = "Rainfall Deviation from LPA"
                 is_percentage = True
             elif calc_method.startswith("Standard Deviation Shift"):
-                forecast_df['vs Forecast Avg'] = (forecast_df['Ensemble_SPI'] - x_bar_avg) * 100
+                baseline1 = 0.0
+                col_name1 = "vs LPA"
+                baseline1_label = f"vs LPA ({baseline1:.3f})"
+                forecast_df['vs Forecast Avg'] = (forecast_df['Ensemble_SPI'] - baseline1) * 100
                 forecast_df['vs Mild Threshold'] = (forecast_df['Ensemble_SPI'] - x_bar_mild) * 100
                 format_dict = {
                     'Ensemble_SPI': '{:.3f}',
-                    'vs Forecast Avg': '{:+.2f}%',
+                    col_name1: '{:+.2f}%',
                     'vs Mild Threshold': '{:+.2f}%'
                 }
                 y_label = "Standard Deviation Shift (%)"
                 title_suffix = "Standard Deviation Shift"
                 is_percentage = True
             elif calc_method.startswith("Traditional Percentage"):
-                forecast_df['vs Forecast Avg'] = ((forecast_df['Ensemble_SPI'] - x_bar_avg) / abs(x_bar_avg)) * 100
+                baseline1 = x_bar_avg
+                col_name1 = "vs Forecast Avg"
+                baseline1_label = f"vs Avg Forecast ({baseline1:.3f})"
+                forecast_df['vs Forecast Avg'] = ((forecast_df['Ensemble_SPI'] - baseline1) / abs(baseline1)) * 100
                 forecast_df['vs Mild Threshold'] = ((forecast_df['Ensemble_SPI'] - x_bar_mild) / abs(x_bar_mild)) * 100
                 format_dict = {
                     'Ensemble_SPI': '{:.3f}',
-                    'vs Forecast Avg': '{:+.2f}%',
+                    col_name1: '{:+.2f}%',
                     'vs Mild Threshold': '{:+.2f}%'
                 }
                 y_label = "Percentage Deviation (%)"
                 title_suffix = "Percentage Deviation (SPI units)"
                 is_percentage = True
             else:
-                forecast_df['vs Forecast Avg'] = forecast_df['Ensemble_SPI'] - x_bar_avg
+                baseline1 = 0.0
+                col_name1 = "vs LPA"
+                baseline1_label = f"vs LPA ({baseline1:.3f})"
+                forecast_df['vs Forecast Avg'] = forecast_df['Ensemble_SPI'] - baseline1
                 forecast_df['vs Mild Threshold'] = forecast_df['Ensemble_SPI'] - x_bar_mild
                 format_dict = {
                     'Ensemble_SPI': '{:.3f}',
-                    'vs Forecast Avg': '{:+.3f}',
+                    col_name1: '{:+.3f}',
                     'vs Mild Threshold': '{:+.3f}'
                 }
                 y_label = "Absolute Difference (SPI)"
                 title_suffix = "Absolute Difference"
                 is_percentage = False
             
-            display_df = forecast_df[['Year', 'Ensemble_SPI', 'vs Forecast Avg', 'vs Mild Threshold']].copy()
+            # Rename the column dynamically in forecast_df
+            forecast_df = forecast_df.rename(columns={'vs Forecast Avg': col_name1})
+            display_df = forecast_df[['Year', 'Ensemble_SPI', col_name1, 'vs Mild Threshold']].copy()
             display_df['Year'] = display_df['Year'].astype(int)
             
             st.subheader("Year-by-Year Deviation")
@@ -491,7 +524,7 @@ if data_loaded:
             fig, ax = plt.subplots(figsize=(12, 5))
             
             # Plot Baseline 1 (Purple)
-            ax.plot(display_df['Year'], display_df['vs Forecast Avg'], marker='o', color='purple', linewidth=2, label=f'vs Avg Forecast ({x_bar_avg:.3f})')
+            ax.plot(display_df['Year'], display_df[col_name1], marker='o', color='purple', linewidth=2, label=baseline1_label)
             # Plot Baseline 2 (Orange)
             ax.plot(display_df['Year'], display_df['vs Mild Threshold'], marker='s', color='darkorange', linewidth=2, label=f'vs Mild Threshold ({x_bar_mild:.3f})')
             
@@ -518,4 +551,3 @@ if data_loaded:
         except Exception as e:
             st.error(f"Error calculating percentages: {e}")
             st.info("Make sure you have run the data preprocessing and forecast scripts.")
-
