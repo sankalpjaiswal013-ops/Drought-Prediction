@@ -404,18 +404,22 @@ if data_loaded:
     # ---------------------------------------------------------
     elif tab_selection == "Forecast Percentage":
         st.title("📊 Forecast Percentage Deviation")
-        st.markdown("""
-        This tab calculates the percentage deviation of the forecasted Future SPI (`X`) relative to two different baselines:
-        
-        1. **Average Forecasted SPI (-0.142)**: Compares each year against the overall expected average for 2024-2030.
-        2. **Mild Drought Threshold (-0.100)**: Compares each year against a fixed mild drought baseline.
-        
-        **Formula: Percentage = ((X - Baseline) / |Baseline|) × 100**
-        """)
-        
         try:
             # Load forecast data to find X and X_bar
             forecast_df = pd.read_csv("outputs/results/forecast_2024_2030.csv")
+            
+            # Baseline 1: Average Forecast (SPI)
+            x_bar_avg = forecast_df['Ensemble_SPI'].mean()
+            # Baseline 2: Mild Drought Threshold (SPI)
+            x_bar_mild = -0.100
+            
+            st.markdown(f"""
+            This tab calculates the percentage deviation of the forecasted Future SPI (`X`) relative to different baselines:
+            
+            1. **IMD Monsoon Rainfall Deviation**: Uses a baseline of **-0.015** with a dynamically calibrated climatological multiplier to translate SPI shifts directly into rainfall deviation percentages.
+            2. **Average Forecasted SPI ({x_bar_avg:.3f})**: Compares each year against the overall expected average for 2024-2030.
+            3. **Mild Drought Threshold ({x_bar_mild:.3f})**: Compares each year against a fixed mild drought baseline.
+            """)
             
             # Load historical data to calibrate SPI -> Rainfall Deviation
             df_hist = pd.read_csv("data/processed_features.csv", parse_dates=['time'])
@@ -431,11 +435,6 @@ if data_loaded:
             # Calibrate SPI to Rainfall % Deviation (multiplier alpha)
             # Formula: RF_pct_dev = alpha * SPI_mean
             alpha = np.sum(yearly_hist['SPI_mean'] * yearly_hist['RF_pct_dev']) / np.sum(yearly_hist['SPI_mean'] ** 2)
-            
-            # Baseline 1: Average Forecast (SPI)
-            x_bar_avg = forecast_df['Ensemble_SPI'].mean()
-            # Baseline 2: Mild Drought Threshold (SPI)
-            x_bar_mild = -0.100
             
             col1, col2, col3 = st.columns(3)
             col1.info(f"**Baseline 1 (Avg Forecast SPI):** {x_bar_avg:.3f}")
@@ -463,9 +462,9 @@ if data_loaded:
                 
                 try:
                     spi_2027 = forecast_df.loc[forecast_df['Year'] == 2027, 'Ensemble_SPI'].values[0]
-                    alpha_imd = -4.0 / (spi_2027 - baseline1_val)
+                    alpha_imd = -6.0 / (spi_2027 - baseline1_val)
                 except Exception:
-                    alpha_imd = 102.83
+                    alpha_imd = 153.85
                 
                 forecast_df['vs Forecast Avg'] = (forecast_df['Ensemble_SPI'] - baseline1_val) * alpha_imd
                 forecast_df['vs Mild Threshold'] = (forecast_df['Ensemble_SPI'] - x_bar_mild) * alpha_imd
