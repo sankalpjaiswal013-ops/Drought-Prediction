@@ -1,0 +1,24 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Python caching
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Cleaned raw data subfolder (NetCDF files and raw control documents)
+raw_data/
+*.nc
+
+# Deploy folders and cleanup/temp scripts
+deploy_to_cloud/
+clean_workspace.py
+inspect_tar.py
+
+# OS specific files
+.DS_Store
+Thumbs.db
