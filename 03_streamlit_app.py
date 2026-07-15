@@ -455,52 +455,63 @@ if data_loaded:
             
             # Calculate values based on selected method
             if calc_method.startswith("IMD Monsoon Rainfall Deviation"):
-                # Predicted deviation from Forecast Avg and Mild Threshold
-                forecast_df['vs Forecast Avg'] = (forecast_df['Ensemble_SPI'] - x_bar_avg) * alpha
-                forecast_df['vs Mild Threshold'] = (forecast_df['Ensemble_SPI'] - x_bar_mild) * alpha
+                # Use LPA (0.0) as baseline and regression slope (74.58)
+                alpha_imd = 74.58
+                col_name1 = "vs LPA"
+                baseline1_label = f"vs LPA (0.000)"
+                forecast_df['vs Forecast Avg'] = (forecast_df['Ensemble_SPI'] - 0.0) * alpha_imd
+                forecast_df['vs Mild Threshold'] = (forecast_df['Ensemble_SPI'] - x_bar_mild) * alpha_imd
                 format_dict = {
                     'Ensemble_SPI': '{:.3f}',
-                    'vs Forecast Avg': '{:+.2f}%',
+                    col_name1: '{:+.2f}%',
                     'vs Mild Threshold': '{:+.2f}%'
                 }
                 y_label = "Rainfall Deviation from LPA (%)"
                 title_suffix = "Rainfall Deviation from LPA"
                 is_percentage = True
             elif calc_method.startswith("Standard Deviation Shift"):
+                col_name1 = "vs Forecast Avg"
+                baseline1_label = f"vs Avg Forecast ({x_bar_avg:.3f})"
                 forecast_df['vs Forecast Avg'] = (forecast_df['Ensemble_SPI'] - x_bar_avg) * 100
                 forecast_df['vs Mild Threshold'] = (forecast_df['Ensemble_SPI'] - x_bar_mild) * 100
                 format_dict = {
                     'Ensemble_SPI': '{:.3f}',
-                    'vs Forecast Avg': '{:+.2f}%',
+                    col_name1: '{:+.2f}%',
                     'vs Mild Threshold': '{:+.2f}%'
                 }
                 y_label = "Standard Deviation Shift (%)"
                 title_suffix = "Standard Deviation Shift"
                 is_percentage = True
             elif calc_method.startswith("Traditional Percentage"):
+                col_name1 = "vs Forecast Avg"
+                baseline1_label = f"vs Avg Forecast ({x_bar_avg:.3f})"
                 forecast_df['vs Forecast Avg'] = ((forecast_df['Ensemble_SPI'] - x_bar_avg) / abs(x_bar_avg)) * 100
                 forecast_df['vs Mild Threshold'] = ((forecast_df['Ensemble_SPI'] - x_bar_mild) / abs(x_bar_mild)) * 100
                 format_dict = {
                     'Ensemble_SPI': '{:.3f}',
-                    'vs Forecast Avg': '{:+.2f}%',
+                    col_name1: '{:+.2f}%',
                     'vs Mild Threshold': '{:+.2f}%'
                 }
                 y_label = "Percentage Deviation (%)"
                 title_suffix = "Percentage Deviation (SPI units)"
                 is_percentage = True
             else:
+                col_name1 = "vs Forecast Avg"
+                baseline1_label = f"vs Avg Forecast ({x_bar_avg:.3f})"
                 forecast_df['vs Forecast Avg'] = forecast_df['Ensemble_SPI'] - x_bar_avg
                 forecast_df['vs Mild Threshold'] = forecast_df['Ensemble_SPI'] - x_bar_mild
                 format_dict = {
                     'Ensemble_SPI': '{:.3f}',
-                    'vs Forecast Avg': '{:+.3f}',
+                    col_name1: '{:+.3f}',
                     'vs Mild Threshold': '{:+.3f}'
                 }
                 y_label = "Absolute Difference (SPI)"
                 title_suffix = "Absolute Difference"
                 is_percentage = False
             
-            display_df = forecast_df[['Year', 'Ensemble_SPI', 'vs Forecast Avg', 'vs Mild Threshold']].copy()
+            # Rename the column dynamically in forecast_df
+            forecast_df = forecast_df.rename(columns={'vs Forecast Avg': col_name1})
+            display_df = forecast_df[['Year', 'Ensemble_SPI', col_name1, 'vs Mild Threshold']].copy()
             display_df['Year'] = display_df['Year'].astype(int)
             
             st.subheader("Year-by-Year Deviation")
@@ -510,7 +521,7 @@ if data_loaded:
             fig, ax = plt.subplots(figsize=(12, 5))
             
             # Plot Baseline 1 (Purple)
-            ax.plot(display_df['Year'], display_df['vs Forecast Avg'], marker='o', color='purple', linewidth=2, label=f'vs Avg Forecast ({x_bar_avg:.3f})')
+            ax.plot(display_df['Year'], display_df[col_name1], marker='o', color='purple', linewidth=2, label=baseline1_label)
             # Plot Baseline 2 (Orange)
             ax.plot(display_df['Year'], display_df['vs Mild Threshold'], marker='s', color='darkorange', linewidth=2, label=f'vs Mild Threshold ({x_bar_mild:.3f})')
             
