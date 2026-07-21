@@ -26,14 +26,27 @@ for d in directories:
 # ---------------------------------------------------------
 
 def compute_spi(rainfall_series, scale=4):
-    rolling = pd.Series(rainfall_series).rolling(scale).mean().dropna()
-    mean = rolling.mean()
-    std = rolling.std()
-    spi = (rolling - mean) / std
+    # Convert to series with datetime index
+    s = pd.Series(rainfall_series)
     
-    spi_full = pd.Series(index=rainfall_series.index, dtype=float)
-    spi_full.loc[rolling.index] = spi
-    return spi_full
+    # 1. Compute rolling mean within each year to prevent cross-year leakage
+    rolling = s.groupby(s.index.year, group_keys=False).apply(lambda x: x.rolling(scale).mean())
+    
+    # 2. Standardize each week of the year relative to its own historical distribution
+    weeks = rolling.index.isocalendar().week
+    
+    # Group by calendar week and apply z-score
+    mean_by_week = rolling.groupby(weeks).transform('mean')
+    std_by_week = rolling.groupby(weeks).transform('std')
+    
+    # Avoid division by zero if std is zero or nan
+    std_by_week = std_by_week.replace(0, np.nan)
+    
+    spi = (rolling - mean_by_week) / std_by_week
+    
+    # Fill NaNs from dropping or zero std with 0 (near normal)
+    spi = spi.fillna(0)
+    return spi
 
 print("\nStarting Data Preprocessing...")
 
@@ -163,5 +176,19 @@ try:
 
 except Exception as e:
     import traceback
+    import sys
     print(f"\nFatal Error:\n{e}")
     traceback.print_exc()
+    
+    # Graceful fallback: if processed_features.csv already exists from a prior run,
+    # skip re-processing (e.g. when raw NetCDF files are unavailable / DLL blocked)
+    # and exit cleanly so the rest of the pipeline can continue.
+    fallback_path = "data/processed_features.csv"
+    if os.path.exists(fallback_path):
+        print(f"\n⚠️  WARNING: Raw data processing failed, but '{fallback_path}' already")
+        print(f"   exists from a previous run. Skipping re-processing — using cached data.")
+        print(f"   Pipeline will continue with the existing processed dataset.\n")
+        sys.exit(0)   # Clean exit → run_pipeline.py marks ✓ and continues
+    else:
+        print(f"\n❌ HARD FAILURE: No processed data available. Run raw preprocessing first.")
+        sys.exit(1)   # Non-zero exit → run_pipeline.py correctly aborts

@@ -74,41 +74,49 @@ print(f"\nAutoregressive dataset: {len(X)} samples, {X.shape[1]} features per sa
 print(f"Years covered: {years_arr[0]} to {years_arr[-1]}")
 
 # ---------------------------------------------------------
-# 3. Train on ALL data (no test split — we want max accuracy for forecasting)
+# 3. Train on ALL data (using PCA to prevent overfitting)
 # ---------------------------------------------------------
+from sklearn.decomposition import PCA
+
 scaler_X = MinMaxScaler()
 scaler_y = MinMaxScaler()
 
 X_sc = scaler_X.fit_transform(X)
 y_sc = scaler_y.fit_transform(y.reshape(-1, 1)).ravel()
 
+# Fit PCA to reduce features to 2 components
+pca = PCA(n_components=2, random_state=42)
+X_pca = pca.fit_transform(X_sc)
+explained_var = np.sum(pca.explained_variance_ratio_) * 100
+print(f"\nApplying PCA dimensionality reduction: {X_sc.shape[1]} dims → 2 dims (explains {explained_var:.1f}% variance)")
+
 # Train multiple models and ensemble them for robust forecasting
 models = {}
 
-print("\nTraining forecast models on ALL historical data...")
+print("\nTraining forecast models on ALL historical data (in PCA space)...")
 
 # Random Forest
-rf = RandomForestRegressor(n_estimators=200, max_depth=8, random_state=42)
-rf.fit(X_sc, y_sc)
+rf = RandomForestRegressor(n_estimators=200, max_depth=4, random_state=42)
+rf.fit(X_pca, y_sc)
 models['Random Forest'] = rf
 print("  ✓ Random Forest trained")
 
 # Gradient Boosting
-gb = GradientBoostingRegressor(n_estimators=200, max_depth=4, learning_rate=0.05, random_state=42)
-gb.fit(X_sc, y_sc)
+gb = GradientBoostingRegressor(n_estimators=200, max_depth=3, learning_rate=0.05, random_state=42)
+gb.fit(X_pca, y_sc)
 models['Gradient Boosting'] = gb
 print("  ✓ Gradient Boosting trained")
 
 # MLP
-mlp = MLPRegressor(hidden_layer_sizes=(64, 32), max_iter=500, random_state=42, 
+mlp = MLPRegressor(hidden_layer_sizes=(32, 16), max_iter=500, random_state=42, 
                    early_stopping=True, validation_fraction=0.15)
-mlp.fit(X_sc, y_sc)
+mlp.fit(X_pca, y_sc)
 models['MLP'] = mlp
 print("  ✓ MLP trained")
 
 # SVR
-svr = SVR(kernel='rbf', C=10, epsilon=0.05)
-svr.fit(X_sc, y_sc)
+svr = SVR(kernel='rbf', C=1.0, epsilon=0.1)
+svr.fit(X_pca, y_sc)
 models['SVR'] = svr
 print("  ✓ SVR trained")
 
@@ -117,7 +125,7 @@ print("  ✓ SVR trained")
 # ---------------------------------------------------------
 print("\n--- Training Fit (Sanity Check) ---")
 for name, model in models.items():
-    pred_sc = model.predict(X_sc)
+    pred_sc = model.predict(X_pca)
     pred = scaler_y.inverse_transform(pred_sc.reshape(-1, 1)).ravel()
     rmse = np.sqrt(mean_squared_error(y, pred))
     r2 = r2_score(y, pred)
@@ -145,11 +153,12 @@ for target_year in forecast_years:
     
     row_features = np.array(row_features).reshape(1, -1)
     row_sc = scaler_X.transform(row_features)
+    row_pca = pca.transform(row_sc)
     
     # Predict with each model
     year_predictions = []
     for name, model in models.items():
-        pred_sc = model.predict(row_sc)
+        pred_sc = model.predict(row_pca)
         pred = scaler_y.inverse_transform(pred_sc.reshape(-1, 1)).ravel()[0]
         forecast_results[name].append(pred)
         year_predictions.append(pred)
@@ -253,23 +262,61 @@ plt.close()
 print("Generated Fig 12: Forecast to 2030")
 
 # ---------------------------------------------------------
-# 8. Feature Importance (which past years matter most?)
+# 8. Feature Importance in PCA Space
+#    RF operates on 2 PCA components; show both component
+#    importances AND the PCA loadings of original features.
 # ---------------------------------------------------------
-importances = rf.feature_importances_
-imp_df = pd.DataFrame({
-    'Feature': feature_names,
-    'Importance': importances
-}).sort_values('Importance', ascending=False).head(15)
 
-fig, ax = plt.subplots(figsize=(10, 5))
-ax.barh(imp_df['Feature'][::-1], imp_df['Importance'][::-1], color='steelblue', edgecolor='black')
-ax.set_xlabel('Feature Importance')
-ax.set_title('Top 15 Autoregressive Features for SPI Forecasting')
-ax.grid(axis='x', linestyle=':', alpha=0.5)
+# --- 8a. PCA Component Importances (RF sees 2 dims) ---
+pca_importances = rf.feature_importances_          # shape: (2,)
+pca_labels = [f"PC{i+1}\n({pca.explained_variance_ratio_[i]*100:.1f}% var)"
+              for i in range(len(pca_importances))]
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+# Left: PCA component importances
+axes[0].bar(pca_labels, pca_importances, color=['#2196F3', '#FF9800'],
+            edgecolor='black', width=0.5)
+axes[0].set_ylabel('Feature Importance (Gini)')
+axes[0].set_title('Random Forest Importance\nin PCA Space')
+axes[0].set_ylim(0, 1)
+for i, v in enumerate(pca_importances):
+    axes[0].text(i, v + 0.02, f"{v:.3f}", ha='center', fontweight='bold')
+axes[0].grid(axis='y', linestyle=':', alpha=0.5)
+
+# Right: PCA Loadings heatmap — contribution of original lag features to each PC
+import matplotlib.colors as mcolors
+components = pca.components_          # shape: (2, n_features)
+# Use only a readable subset: one lag of each base variable
+base_feature_cols = [c for c in feature_cols]   # 8 or 9 base variables
+loading_labels = [f"{col}\n(lag1)" for col in base_feature_cols]
+# Take the loadings for lag-1 features (indices 0..len(feature_cols)-1)
+n_base = len(base_feature_cols)
+loading_data = components[:, :n_base]           # shape: (2, n_base)
+
+im = axes[1].imshow(loading_data, cmap='RdBu_r', aspect='auto',
+                    vmin=-1, vmax=1)
+axes[1].set_xticks(range(n_base))
+axes[1].set_xticklabels(loading_labels, rotation=45, ha='right', fontsize=8)
+axes[1].set_yticks(range(2))
+axes[1].set_yticklabels([f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}%)",
+                          f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)"])
+axes[1].set_title("PCA Loadings\n(lag-1 features → principal components)")
+plt.colorbar(im, ax=axes[1], label='Loading weight')
+
+# Annotate each cell
+for r in range(2):
+    for c in range(n_base):
+        axes[1].text(c, r, f"{loading_data[r, c]:.2f}",
+                     ha='center', va='center', fontsize=7,
+                     color='white' if abs(loading_data[r, c]) > 0.5 else 'black')
+
+plt.suptitle('Feature Importance & PCA Loadings for SPI Forecasting',
+             fontsize=13, fontweight='bold')
 plt.tight_layout()
 plt.savefig("outputs/figures/Fig13_Forecast_Feature_Importance.png", dpi=300)
 plt.close()
-print("Generated Fig 13: Forecast Feature Importance")
+print("Generated Fig 13: Forecast Feature Importance (PCA components + loadings)")
 
 print("\n" + "=" * 60)
 print("  Forecast pipeline complete!")

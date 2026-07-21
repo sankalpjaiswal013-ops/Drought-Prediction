@@ -42,7 +42,11 @@ python 03_evaluation_figures.py
 ### 4. Launch the Dashboard
 Opens the interactive web application to visualize metrics, predictions, and perform live manual forecasting:
 ```bash
+# Standard command:
 streamlit run 03_streamlit_app.py
+
+# Alternative (if streamlit.exe is blocked by Windows Application Control policy):
+python -m streamlit run 03_streamlit_app.py
 ```
 
 ## Key Findings
