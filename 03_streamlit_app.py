@@ -1179,9 +1179,9 @@ if data_loaded:
                     mime='text/csv'
                 )
 
-            except Exception as e:
-                st.error(f"Error computing RAI: {e}")
-                st.info("Ensure `data/processed_features.csv` exists and contains correct columns.")
+        except Exception as e:
+            st.error(f"Error computing RAI: {e}")
+            st.info("Ensure `data/processed_features.csv` exists and contains correct columns.")
 
     # ---------------------------------------------------------
     # Tab 12: Multi-Index Comparison
