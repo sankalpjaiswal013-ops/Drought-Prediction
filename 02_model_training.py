@@ -22,7 +22,7 @@ if not os.path.exists(data_path):
     raise FileNotFoundError(f"Could not find {data_path}. Run 01_data_preprocessing.py first.")
 
 df = pd.read_csv(data_path, parse_dates=['time'])
-df = df.sort_values('time').reset_index(drop=True)
+df = df.dropna().sort_values('time').reset_index(drop=True)
 print(f"Loaded {len(df)} weekly records from 1981 to 2023.")
 
 # 2. Build Input-Output Sequences

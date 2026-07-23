@@ -1,5 +1,9 @@
 # Uttar Pradesh Drought Prediction using Machine Learning
 
+[![Live Demo](https://img.shields.io/badge/🚀%20Live%20Demo-Streamlit-FF4B4B?style=for-the-badge&logo=streamlit)](https://drought-prediction-xcbtufsrj5aqu9naaaldar.streamlit.app/)
+
+> **🔗 Live App:** https://drought-prediction-xcbtufsrj5aqu9naaaldar.streamlit.app/
+
 ## Project Overview
 This project is an end-to-end Machine Learning pipeline designed to predict the **Standardized Precipitation Index (SPI)** (drought conditions) for the **Eastern Uttar Pradesh** region during the monsoon season (JJAS: June, July, August, September).
 

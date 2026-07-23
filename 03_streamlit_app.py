@@ -120,6 +120,8 @@ if data_loaded:
             except:
                 st.info("Boxplots not found.")
                 
+
+
         # Export button for metrics
         csv_1 = metrics_df.to_csv(index=False).encode('utf-8')
         st.download_button(
@@ -416,7 +418,7 @@ if data_loaded:
             st.markdown(f"""
             This tab calculates the percentage deviation of the forecasted Future SPI (`X`) relative to different baselines:
             
-            1. **IMD Monsoon Rainfall Deviation**: Uses a baseline of **-0.015** with a dynamically calibrated climatological multiplier to translate SPI shifts directly into rainfall deviation percentages.
+            1. **IMD Monsoon Rainfall Deviation**: Uses a Long Period Average baseline (**0.000 SPI**) with the calibrated climatological multiplier ($\alpha \approx 38.03$) to translate SPI anomalies directly into IMD monsoon rainfall percentage deviation from LPA.
             2. **Average Forecasted SPI ({x_bar_avg:.3f})**: Compares each year against the overall expected average for 2024-2030.
             3. **Mild Drought Threshold ({x_bar_mild:.3f})**: Compares each year against a fixed mild drought baseline.
             """)
@@ -454,20 +456,14 @@ if data_loaded:
             
             # Calculate values based on selected method
             if calc_method.startswith("IMD Monsoon Rainfall Deviation"):
-                # Baseline set to -0.015 so that recovering years (>-0.015) are positive,
-                # and dynamically calibrate alpha so that 2027 is exactly -4.0%
-                baseline1_val = -0.015
-                col_name1 = "vs Baseline"
-                baseline1_label = f"vs Baseline ({baseline1_val:.3f})"
+                # Standard IMD Monsoon Rainfall % Deviation from Long Period Average (LPA = 0.000 SPI)
+                # Calibrated from historical data (1981-2023): RF_pct_dev = SPI_mean * alpha (alpha ~ 38.03)
+                baseline1_val = 0.0
+                col_name1 = "vs LPA"
+                baseline1_label = f"vs LPA ({baseline1_val:.3f})"
                 
-                try:
-                    spi_2027 = forecast_df.loc[forecast_df['Year'] == 2027, 'Ensemble_SPI'].values[0]
-                    alpha_imd = -6.0 / (spi_2027 - baseline1_val)
-                except Exception:
-                    alpha_imd = 153.85
-                
-                forecast_df['vs Forecast Avg'] = (forecast_df['Ensemble_SPI'] - baseline1_val) * alpha_imd
-                forecast_df['vs Mild Threshold'] = (forecast_df['Ensemble_SPI'] - x_bar_mild) * alpha_imd
+                forecast_df['vs Forecast Avg'] = (forecast_df['Ensemble_SPI'] - baseline1_val) * alpha
+                forecast_df['vs Mild Threshold'] = (forecast_df['Ensemble_SPI'] - x_bar_mild) * alpha
                 format_dict = {
                     'Ensemble_SPI': '{:.3f}',
                     col_name1: '{:+.2f}%',

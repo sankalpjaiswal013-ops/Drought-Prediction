@@ -143,6 +143,9 @@ forecast_years = list(range(2024, 2031))
 forecast_results = {name: [] for name in models}
 ensemble_forecast = []
 
+# Fit linear regression slopes between SPI_mean and climate features for physical feature synthesis
+feature_slopes = {col: np.polyfit(yearly['SPI_mean'], yearly[col], 1) for col in feature_cols}
+
 for target_year in forecast_years:
     # Build feature vector from recent_data buffer
     row_features = []
@@ -165,17 +168,26 @@ for target_year in forecast_years:
     
     # Ensemble = mean of all models
     ensemble_val = np.mean(year_predictions)
+    
+    # Incorporate physical temporal drought persistence memory:
+    # If preceding year (e.g. 2026) experienced a rainfall deficit (SPI < 0),
+    # carry over a residual soil/hydrological deficit effect into the next year (2027).
+    # The persistence weight scales with severity — a large deficit like -8 should
+    # exert a much stronger drag on the following year than a mild -0.3 deficit.
+    if len(ensemble_forecast) > 0 and ensemble_forecast[-1] < 0:
+        prev_deficit = ensemble_forecast[-1]
+        # Scale persistence weight by deficit magnitude (capped at 0.70 to preserve some ML signal)
+        # e.g. SPI=-1 → weight≈0.35, SPI=-3 → weight≈0.45, SPI=-8 → weight≈0.70
+        persistence_weight = min(0.70, 0.30 + abs(prev_deficit) * 0.05)
+        ensemble_val = (1 - persistence_weight) * ensemble_val + persistence_weight * (prev_deficit * 0.45)
+    
     ensemble_forecast.append(ensemble_val)
     
-    # For the next iteration, we need to append a "synthetic" row to recent_data
-    # We use the ensemble SPI prediction and extrapolate climate variables from recent trends
-    last_row = recent_data[-1]
-    # Slightly decay climate features toward their historical mean (conservative assumption)
-    hist_means = yearly[feature_cols].mean().values
-    alpha = 0.7  # weight toward recent data vs historical mean
-    synthetic_row = [ensemble_val]  # SPI_mean = our prediction
-    for j in range(1, len(feature_cols)):
-        synthetic_row.append(alpha * last_row[j] + (1 - alpha) * hist_means[j])
+    # Construct physically consistent synthetic feature row using empirical regressions
+    synthetic_row = []
+    for col in feature_cols:
+        slope_val, intercept_val = feature_slopes[col]
+        synthetic_row.append(slope_val * ensemble_val + intercept_val)
     
     recent_data.append(synthetic_row)
     
