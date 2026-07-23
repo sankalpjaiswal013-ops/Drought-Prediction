@@ -116,7 +116,7 @@ if data_loaded:
                 spi_m.style
                     .highlight_max(subset=['R2','Correlation'], color='lightgreen')
                     .highlight_min(subset=['RMSE','MAE'],        color='lightgreen'),
-                use_container_width=True
+                width='stretch'
             )
         with col_spei:
             st.subheader(f"🟢 SPEI Model — {period_label}")
@@ -125,7 +125,7 @@ if data_loaded:
                     spei_m.style
                         .highlight_max(subset=['R2','Correlation'], color='#d4edda')
                         .highlight_min(subset=['RMSE','MAE'],        color='#d4edda'),
-                    use_container_width=True
+                    width='stretch'
                 )
             else:
                 st.info("SPEI metrics not found. Run `python 02_model_training.py` first.")
@@ -149,7 +149,7 @@ if data_loaded:
                 lambda col: [colour_delta(v, col.name) for v in col]
                 if col.name != 'Model' else ['' for _ in col], axis=0
             ).format({c: '{:+.4f}' for c in ['R2','RMSE','MAE','Correlation']})
-            st.dataframe(styled_delta, use_container_width=True)
+            st.dataframe(styled_delta, width='stretch')
 
         st.markdown("---")
 
@@ -865,7 +865,7 @@ if data_loaded:
                     })
                     .background_gradient(subset=['SPEI-3'], cmap='RdYlBu', vmin=-3, vmax=3)
                 )
-                st.dataframe(styled, use_container_width=True, height=420)
+                st.dataframe(styled, width='stretch', height=420)
 
                 # ── Download button ───────────────────────────────────────────
                 csv_spei = table_df.to_csv(index=False).encode('utf-8')
