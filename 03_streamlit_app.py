@@ -645,7 +645,13 @@ if data_loaded:
                 df_spei = df.copy()
                 df_spei['year']  = df_spei['time'].dt.year
                 df_spei['month'] = df_spei['time'].dt.month
-                df_spei['day_count'] = df_spei['time'].dt.days_in_month  # for days-weighted PET
+
+                # ⚠️ Restrict to JJAS monsoon months (June–September) only.
+                # October is post-monsoon with near-zero rainfall but high PET,
+                # producing extreme negative water balances that hit the log-logistic
+                # CDF floor (SPEI = −3.090 artefact). SPEI is only physically
+                # meaningful during the active monsoon season for this dataset.
+                df_spei = df_spei[df_spei['month'].between(6, 9)]
 
                 monthly = df_spei.groupby(['year', 'month']).agg(
                     Rainfall_mm=('Rainfall', 'sum'),
