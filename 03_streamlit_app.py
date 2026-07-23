@@ -55,7 +55,7 @@ st.sidebar.markdown(f"""
 tab_selection = st.sidebar.radio(
     "Navigation",
     ["Overview & Data", "Spatial Map", "Model Comparison", "Prediction Plots", "Model Interpretation",
-     "Decision Summary", "Live Predictor", "Future Forecast", "Forecast Percentage", "SPEI Analysis"]
+     "Decision Summary", "Live Predictor", "Future Forecast", "Forecast Percentage", "SPEI Analysis", "RAI Analysis"]
 )
 
 if data_loaded:
@@ -904,4 +904,283 @@ if data_loaded:
             except Exception as e:
                 st.error(f"Error computing SPEI: {e}")
                 st.info("Ensure `data/processed_features.csv` exists and contains Rainfall, Max_Temp, and time columns.")
+
+    # ---------------------------------------------------------
+    # Tab 11: RAI Analysis
+    # ---------------------------------------------------------
+    elif tab_selection == "RAI Analysis":
+        st.title("🌧️ Rainfall Anomaly Index (RAI) Analysis")
+        st.markdown("""
+        The **Rainfall Anomaly Index (RAI)**, proposed by **Van Rooy (1965)**, is a classic meteorological index used to quantify 
+        rainfall anomalies and classify drought severity. It scales precipitation departures between **+3 (extreme wetness)** and **-3 (extreme dry anomalies)**.
+        """)
+
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            st.markdown("""
+            **Positive Anomalies $(N > N_a)$:**
+            """)
+            st.latex(r"RAI = 3 \times \frac{N - N_a}{M_a - N_a}")
+        with col_f2:
+            st.markdown("""
+            **Negative Anomalies $(N < N_a)$:**
+            """)
+            st.latex(r"RAI = -3 \times \frac{N - N_a}{X_a - N_a}")
+
+        st.markdown("""
+        Where:
+        *   $N$ = Actual rainfall for the period (yearly total or monthly sum).
+        *   $N_a$ = Historical average rainfall for that period.
+        *   $M_a$ = Mean of the **10 highest** rainfall values in the historical series.
+        *   $X_a$ = Mean of the **10 lowest** rainfall values in the historical series.
+        """)
+
+        st.markdown("---")
+
+        # Select Anomaly Scale
+        rai_scale = st.radio(
+            "Select Anomaly Analysis Scale:",
+            ["Yearly JJAS Monsoon Anomaly", "Monthly Monsoon Anomaly (JJAS)"],
+            horizontal=True
+        )
+
+        try:
+            df_rai = df.copy()
+            df_rai['year'] = df_rai['time'].dt.year
+            df_rai['month'] = df_rai['time'].dt.month
+
+            # Filter to active monsoon months only (June - September)
+            df_rai = df_rai[df_rai['month'].between(6, 9)]
+
+            # Helper for color coding classification
+            def color_rai(val):
+                if val >= 2.0: return 'background-color:#1a6fc4; color:white'      # Very/Extremely Wet
+                elif val >= 1.0: return 'background-color:#5aadff; color:black'    # Moderately Wet
+                elif val >= 0.5: return 'background-color:#bbdefb; color:black'    # Slightly Wet
+                elif val >= -0.5: return 'background-color:#e8f5e9; color:black'   # Near Normal
+                elif val >= -1.0: return 'background-color:#ffe082; color:black'   # Slightly Dry
+                elif val >= -2.0: return 'background-color:#ff8a65; color:black'   # Moderately Dry
+                else: return 'background-color:#b71c1c; color:white'              # Very/Extremely Dry
+
+            if rai_scale == "Yearly JJAS Monsoon Anomaly":
+                # Compute yearly cumulative JJAS rainfall
+                yearly = df_rai.groupby('year').agg(
+                    Rainfall_mm=('Rainfall', 'sum')
+                ).reset_index().sort_values('year').reset_index(drop=True)
+
+                N_series = yearly['Rainfall_mm'].values
+                N_a = N_series.mean()
+                sorted_N = np.sort(N_series)
+                X_a = sorted_N[:10].mean()   # Mean of 10 lowest values
+                M_a = sorted_N[-10:].mean()  # Mean of 10 highest values
+
+                rai_values = []
+                for N in N_series:
+                    if N >= N_a:
+                        rai_val = 3.0 * (N - N_a) / (M_a - N_a)
+                    else:
+                        rai_val = -3.0 * (N - N_a) / (X_a - N_a)
+                    rai_values.append(rai_val)
+
+                yearly['RAI'] = rai_values
+
+                def classify_rai(v):
+                    if v >= 3.0: return "Extremely Wet"
+                    elif v >= 2.0: return "Very Wet"
+                    elif v >= 1.0: return "Moderately Wet"
+                    elif v >= 0.5: return "Slightly Wet"
+                    elif v >= -0.5: return "Near Normal"
+                    elif v >= -1.0: return "Slightly Dry"
+                    elif v >= -2.0: return "Moderately Dry"
+                    elif v >= -3.0: return "Very Dry"
+                    else: return "Extremely Dry"
+
+                yearly['Classification'] = yearly['RAI'].apply(classify_rai)
+
+                # KPIs
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Long-Period Average (LPA)", f"{N_a:.1f} mm")
+                k2.metric("Worst Deficit (Min RAI)", f"{yearly['RAI'].min():.2f}", f"Year: {yearly.loc[yearly['RAI'].idxmin(), 'year']}")
+                k3.metric("Highest Anomaly (Max RAI)", f"{yearly['RAI'].max():.2f}", f"Year: {yearly.loc[yearly['RAI'].idxmax(), 'year']}")
+                k4.metric("Drought Years (RAI < -1.0)", f"{len(yearly[yearly['RAI'] < -1.0])} / {len(yearly)}")
+
+                st.markdown("---")
+
+                # Year range slider
+                y_min, y_max = int(yearly['year'].min()), int(yearly['year'].max())
+                yr_start, yr_end = st.slider("Select Year Range", y_min, y_max, (y_min, y_max), key="yearly_rai_yr_slider")
+
+                plot_df = yearly[(yearly['year'] >= yr_start) & (yearly['year'] <= yr_end)].copy()
+
+                # Visualisation
+                st.subheader("📊 Yearly Anomaly Distribution")
+                fig, ax = plt.subplots(figsize=(14, 5))
+                colors = ['#1565c0' if v >= 0 else '#c62828' for v in plot_df['RAI']]
+                bars = ax.bar(plot_df['year'].astype(int), plot_df['RAI'], color=colors, edgecolor='black', alpha=0.85, width=0.7)
+
+                ax.axhline(0, color='black', linewidth=1)
+                ax.axhline(-1.0, color='orange', linestyle='--', alpha=0.7, label='Moderate Deficit (−1.0)')
+                ax.axhline(-2.0, color='red', linestyle='--', alpha=0.7, label='Severe Deficit (−2.0)')
+
+                ax.set_xticks(plot_df['year'].astype(int))
+                ax.tick_params(axis='x', rotation=45, labelsize=9)
+                ax.set_ylabel("RAI Value", fontsize=11, fontweight='bold')
+                ax.set_xlabel("Year", fontsize=11)
+                ax.set_title(f"Yearly Rainfall Anomaly Index (RAI) — Eastern UP ({yr_start}–{yr_end})", fontsize=13, fontweight='bold')
+                ax.grid(axis='y', linestyle=':', alpha=0.5)
+                ax.legend(loc='lower left')
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close()
+
+                # Data Table
+                st.subheader("📋 Computed Yearly RAI Table")
+                table_df = plot_df.copy()
+                table_df.columns = ['Year', 'JJAS Rainfall (mm)', 'RAI Value', 'Classification']
+                table_df['Year'] = table_df['Year'].astype(int)
+
+                def style_row_yearly(row):
+                    bg = color_rai(row['RAI Value'])
+                    return ['' if col != 'Classification' else bg for col in row.index]
+
+                styled_tbl = (
+                    table_df.style
+                    .apply(style_row_yearly, axis=1)
+                    .format({
+                        'JJAS Rainfall (mm)': '{:.1f}',
+                        'RAI Value': '{:+.3f}'
+                    })
+                )
+                st.dataframe(styled_tbl, use_container_width=True, height=400)
+
+                # Download
+                csv_yearly = table_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Yearly RAI as CSV",
+                    data=csv_yearly,
+                    file_name='yearly_rai_eastern_up.csv',
+                    mime='text/csv'
+                )
+
+            else:
+                # Monthly monsoon Anomaly
+                monthly_list = []
+                for m in [6, 7, 8, 9]:
+                    m_df = df_rai[df_rai['month'] == m].groupby('year').agg(
+                        Rainfall_mm=('Rainfall', 'sum')
+                    ).reset_index().sort_values('year').reset_index(drop=True)
+
+                    N_series = m_df['Rainfall_mm'].values
+                    N_a = N_series.mean()
+                    sorted_N = np.sort(N_series)
+                    X_a = sorted_N[:10].mean()
+                    M_a = sorted_N[-10:].mean()
+
+                    m_df['N_a'] = N_a
+                    m_df['month'] = m
+
+                    rai_m = []
+                    for N in N_series:
+                        if N >= N_a:
+                            rai_val = 3.0 * (N - N_a) / (M_a - N_a)
+                        else:
+                            rai_val = -3.0 * (N - N_a) / (X_a - N_a)
+                        rai_m.append(rai_val)
+
+                    m_df['RAI'] = rai_m
+                    monthly_list.append(m_df)
+
+                monthly = pd.concat(monthly_list).sort_values(['year', 'month']).reset_index(drop=True)
+
+                def classify_rai(v):
+                    if v >= 3.0: return "Extremely Wet"
+                    elif v >= 2.0: return "Very Wet"
+                    elif v >= 1.0: return "Moderately Wet"
+                    elif v >= 0.5: return "Slightly Wet"
+                    elif v >= -0.5: return "Near Normal"
+                    elif v >= -1.0: return "Slightly Dry"
+                    elif v >= -2.0: return "Moderately Dry"
+                    elif v >= -3.0: return "Very Dry"
+                    else: return "Extremely Dry"
+
+                monthly['Classification'] = monthly['RAI'].apply(classify_rai)
+
+                # KPIs
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Monsoon Months Analyzed", len(monthly))
+                k2.metric("Min Monthly RAI", f"{monthly['RAI'].min():.2f}", f"Yr: {monthly.loc[monthly['RAI'].idxmin(), 'year']} (Month: {int(monthly.loc[monthly['RAI'].idxmin(), 'month'])})")
+                k3.metric("Max Monthly RAI", f"{monthly['RAI'].max():.2f}", f"Yr: {monthly.loc[monthly['RAI'].idxmax(), 'year']} (Month: {int(monthly.loc[monthly['RAI'].idxmax(), 'month'])})")
+                k4.metric("Drought Months (RAI < -1.0)", f"{len(monthly[monthly['RAI'] < -1.0])} / {len(monthly)}")
+
+                st.markdown("---")
+
+                # Year range slider
+                y_min, y_max = int(monthly['year'].min()), int(monthly['year'].max())
+                yr_start, yr_end = st.slider("Select Year Range", y_min, y_max, (y_min, y_max), key="monthly_rai_yr_slider")
+
+                plot_df = monthly[(monthly['year'] >= yr_start) & (monthly['year'] <= yr_end)].copy()
+
+                # Visualisation
+                st.subheader("📈 Monthly Anomaly Time-Series")
+                fig, ax = plt.subplots(figsize=(16, 5))
+                x_idx = range(len(plot_df))
+                rai_arr = plot_df['RAI'].values
+                labels = [f"{int(r['year'])}-{int(r['month']):02d}" for _, r in plot_df.iterrows()]
+
+                colors = ['#1565c0' if v >= 0 else '#c62828' for v in rai_arr]
+                ax.bar(x_idx, rai_arr, color=colors, edgecolor='none', alpha=0.75, width=0.8)
+
+                ax.axhline(0, color='black', linewidth=1)
+                ax.axhline(-1.0, color='orange', linestyle='--', alpha=0.7, label='Moderate Deficit (−1.0)')
+                ax.axhline(-2.0, color='red', linestyle='--', alpha=0.7, label='Severe Deficit (−2.0)')
+
+                # Show ticks every 4 months (1 year of JJAS)
+                tick_positions = list(range(0, len(plot_df), 4))
+                ax.set_xticks(tick_positions)
+                ax.set_xticklabels([labels[i] for i in tick_positions], rotation=45, ha='right', fontsize=9)
+
+                ax.set_ylabel("RAI Value", fontsize=11, fontweight='bold')
+                ax.set_xlabel("Year-Month", fontsize=11)
+                ax.set_title(f"Monthly Rainfall Anomaly Index (RAI) — Eastern UP ({yr_start}–{yr_end})", fontsize=13, fontweight='bold')
+                ax.grid(axis='y', linestyle=':', alpha=0.5)
+                ax.legend(loc='lower left')
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close()
+
+                # Data Table
+                st.subheader("📋 Computed Monthly RAI Table")
+                table_df = plot_df[['year', 'month', 'Rainfall_mm', 'N_a', 'RAI', 'Classification']].copy()
+                table_df.columns = ['Year', 'Month', 'Rainfall (mm)', 'LPA (mm)', 'RAI Value', 'Classification']
+                table_df['Year'] = table_df['Year'].astype(int)
+                table_df['Month'] = table_df['Month'].astype(int)
+
+                def style_row_monthly(row):
+                    bg = color_rai(row['RAI Value'])
+                    return ['' if col != 'Classification' else bg for col in row.index]
+
+                styled_tbl = (
+                    table_df.style
+                    .apply(style_row_monthly, axis=1)
+                    .format({
+                        'Rainfall (mm)': '{:.1f}',
+                        'LPA (mm)': '{:.1f}',
+                        'RAI Value': '{:+.3f}'
+                    })
+                )
+                st.dataframe(styled_tbl, use_container_width=True, height=420)
+
+                # Download
+                csv_monthly = table_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Monthly RAI as CSV",
+                    data=csv_monthly,
+                    file_name='monthly_rai_eastern_up.csv',
+                    mime='text/csv'
+                )
+
+        except Exception as e:
+            st.error(f"Error computing RAI: {e}")
+            st.info("Ensure `data/processed_features.csv` exists and contains correct columns.")
+
 
