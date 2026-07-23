@@ -55,7 +55,7 @@ st.sidebar.markdown(f"""
 tab_selection = st.sidebar.radio(
     "Navigation",
     ["Overview & Data", "Spatial Map", "Model Comparison", "Prediction Plots", "Model Interpretation",
-     "Decision Summary", "Live Predictor", "Future Forecast", "Forecast Percentage", "SPEI Analysis", "RAI Analysis"]
+     "Decision Summary", "Live Predictor", "Future Forecast", "Forecast Percentage", "SPEI Analysis", "RAI Analysis", "Multi-Index Comparison"]
 )
 
 if data_loaded:
@@ -1179,8 +1179,248 @@ if data_loaded:
                     mime='text/csv'
                 )
 
+            except Exception as e:
+                st.error(f"Error computing RAI: {e}")
+                st.info("Ensure `data/processed_features.csv` exists and contains correct columns.")
+
+    # ---------------------------------------------------------
+    # Tab 12: Multi-Index Comparison
+    # ---------------------------------------------------------
+    elif tab_selection == "Multi-Index Comparison":
+        st.title("🔀 Multi-Index Comparison: SPI vs. SPEI vs. RAI")
+        st.markdown("""
+        This tab provides a direct comparison between the three primary drought indices calculated for Eastern Uttar Pradesh:
+        1.  **SPI (Standardized Precipitation Index)** — Meteorological drought (precipitation deficit only).
+        2.  **SPEI (Standardized Precipitation Evapotranspiration Index)** — Agricultural/hydrological drought (precipitation deficit + evapotranspiration water demand).
+        3.  **RAI (Rainfall Anomaly Index)** — Meteorological anomaly (scaled linear precipitation deviations).
+        """)
+
+        st.markdown("---")
+
+        compare_scale = st.radio(
+            "Select Comparison Scale:",
+            ["Yearly Comparison (Monsoon Season)", "Monthly Comparison (JJAS)"],
+            horizontal=True
+        )
+
+        try:
+            import scipy.stats as stats
+
+            # ── 1. Calculate Monthly Base Series ──────────────────────────────────
+            df_comp = df.copy()
+            df_comp['year'] = df_comp['time'].dt.year
+            df_comp['month'] = df_comp['time'].dt.month
+            df_comp = df_comp[df_comp['month'].between(6, 9)]  # JJAS monsoon only
+
+            # Monthly aggregation
+            monthly = df_comp.groupby(['year', 'month']).agg(
+                Rainfall_mm=('Rainfall', 'sum'),
+                MaxTemp_C=('Max_Temp', 'mean'),
+                SPI_mean=('SPI', 'mean')
+            ).reset_index().sort_values(['year', 'month']).reset_index(drop=True)
+
+            # SPEI-3 Calculation
+            clim_mean = (monthly.groupby('month')['MaxTemp_C'].mean() - 5.0).clip(lower=0)
+            I_heat = ((clim_mean / 5.0) ** 1.514).sum()
+            a_exp  = 6.75e-7*I_heat**3 - 7.71e-5*I_heat**2 + 1.792e-2*I_heat + 0.49239
+
+            def pet_val(row):
+                T = max(row['MaxTemp_C'] - 5.0, 0)
+                days = 31 if row['month'] in [7, 8] else 30
+                return 16 * ((10*T/I_heat)**a_exp) * (days/30) if (I_heat > 0 and T > 0) else 0.0
+
+            monthly['PET_mm'] = monthly.apply(pet_val, axis=1)
+            monthly['D'] = monthly['Rainfall_mm'] - monthly['PET_mm']
+            monthly['D_acc3'] = monthly['D'].rolling(window=3, min_periods=3).sum()
+
+            spei_vals = []
+            for _, row in monthly.iterrows():
+                m = row['month']
+                same = monthly[monthly['month'] == m]['D_acc3'].dropna().values
+                if len(same) < 3 or np.isnan(row['D_acc3']):
+                    spei_vals.append(np.nan)
+                    continue
+                shift = same.min() - 0.001
+                try:
+                    c, loc, scale = stats.fisk.fit(same - shift, floc=0)
+                    p = stats.fisk.cdf(row['D_acc3'] - shift, c, loc, scale)
+                    p = np.clip(p, 0.001, 0.999)
+                    spei_vals.append(stats.norm.ppf(p))
+                except Exception:
+                    spei_vals.append(np.nan)
+            monthly['SPEI_3'] = spei_vals
+
+            # Monthly RAI Calculation (relative to each calendar month)
+            monthly_list = []
+            for m in [6, 7, 8, 9]:
+                m_df = monthly[monthly['month'] == m].copy()
+                N_series = m_df['Rainfall_mm'].values
+                N_a = N_series.mean()
+                sorted_N = np.sort(N_series)
+                X_a = sorted_N[:10].mean()
+                M_a = sorted_N[-10:].mean()
+
+                rai_vals = []
+                for N in N_series:
+                    if N >= N_a:
+                        rai_vals.append(3.0 * (N - N_a) / (M_a - N_a))
+                    else:
+                        rai_vals.append(-3.0 * (N - N_a) / (X_a - N_a))
+                m_df['RAI'] = rai_vals
+                monthly_list.append(m_df)
+            monthly = pd.concat(monthly_list).sort_values(['year', 'month']).reset_index(drop=True)
+
+            if compare_scale == "Yearly Comparison (Monsoon Season)":
+                # Aggregate to yearly mean indices
+                yearly_df = monthly.groupby('year').agg(
+                    Rainfall_mm=('Rainfall_mm', 'sum'),
+                    SPI=('SPI_mean', 'mean'),
+                    SPEI=('SPEI_3', 'mean')
+                ).reset_index().sort_values('year').reset_index(drop=True)
+
+                # Yearly RAI (computed on total yearly JJAS rainfall)
+                N_series = yearly_df['Rainfall_mm'].values
+                N_a = N_series.mean()
+                sorted_N = np.sort(N_series)
+                X_a = sorted_N[:10].mean()
+                M_a = sorted_N[-10:].mean()
+
+                yearly_rai = []
+                for N in N_series:
+                    if N >= N_a:
+                        yearly_rai.append(3.0 * (N - N_a) / (M_a - N_a))
+                    else:
+                        yearly_rai.append(-3.0 * (N - N_a) / (X_a - N_a))
+                yearly_df['RAI'] = yearly_rai
+
+                # Drop rows where SPEI is NaN (first few months of rolling window)
+                yearly_df = yearly_df.dropna(subset=['SPEI']).reset_index(drop=True)
+
+                # Pearson Correlation Matrix
+                corr_matrix = yearly_df[['SPI', 'SPEI', 'RAI']].corr()
+
+                # Visualisation
+                st.subheader("📈 Index Time-Series Comparison (Yearly)")
+                fig, ax = plt.subplots(figsize=(15, 6))
+                years = yearly_df['year'].astype(int).values
+
+                ax.plot(years, yearly_df['SPI'], color='#1e88e5', marker='o', linewidth=2, label='SPI (Precipitation-only)')
+                ax.plot(years, yearly_df['SPEI'], color='#43a047', marker='s', linewidth=2, label='SPEI-3 (Precipitation + Temp)')
+                ax.plot(years, yearly_df['RAI'], color='#e53935', marker='^', linewidth=1.8, linestyle='--', label='RAI (Precipitation anomaly)')
+
+                ax.axhline(0, color='black', linewidth=0.8)
+                ax.axhline(-1.0, color='orange', linestyle=':', alpha=0.8, label='Mild/Moderate Drought (−1.0)')
+                ax.axhline(-1.5, color='red', linestyle=':', alpha=0.8, label='Severe Drought (−1.5)')
+
+                ax.set_xticks(years)
+                ax.set_xticklabels(years, rotation=45)
+                ax.set_ylabel("Index Value", fontweight='bold')
+                ax.set_xlabel("Year", fontweight='bold')
+                ax.set_title("SPI vs. SPEI vs. RAI (Yearly JJAS Mean — Eastern UP)", fontsize=13, fontweight='bold')
+                ax.grid(linestyle=':', alpha=0.5)
+                ax.legend(loc='lower left')
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close()
+
+                # Correlation Matrix Table
+                st.subheader("📊 Pearson Correlation Matrix")
+                st.markdown("Quantifying the statistical similarity between the three indexes:")
+                st.dataframe(corr_matrix.style.background_gradient(cmap='coolwarm', vmin=0, vmax=1).format('{:.4f}'), use_container_width=True)
+
+                # Data Table
+                st.subheader("📋 Dual-Index Yearly Comparison Data")
+                display_df = yearly_df[['year', 'Rainfall_mm', 'SPI', 'SPEI', 'RAI']].copy()
+                display_df.columns = ['Year', 'JJAS Rainfall (mm)', 'SPI (Mean)', 'SPEI-3 (Mean)', 'RAI (Yearly)']
+                display_df['Year'] = display_df['Year'].astype(int)
+
+                st.dataframe(
+                    display_df.style.format({
+                        'JJAS Rainfall (mm)': '{:.1f}',
+                        'SPI (Mean)': '{:+.3f}',
+                        'SPEI-3 (Mean)': '{:+.3f}',
+                        'RAI (Yearly)': '{:+.3f}'
+                    }).background_gradient(subset=['SPI (Mean)', 'SPEI-3 (Mean)', 'RAI (Yearly)'], cmap='RdYlBu', vmin=-2, vmax=2),
+                    use_container_width=True, height=450
+                )
+
+                # Download
+                csv_data = display_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Yearly Index Comparison CSV",
+                    data=csv_data,
+                    file_name='yearly_indices_comparison.csv',
+                    mime='text/csv'
+                )
+
+            else:
+                # Monthly Comparison
+                monthly_df = monthly.dropna(subset=['SPEI_3']).reset_index(drop=True)
+                corr_matrix = monthly_df[['SPI_mean', 'SPEI_3', 'RAI']].corr()
+                corr_matrix.columns = ['SPI', 'SPEI-3', 'RAI']
+                corr_matrix.index = ['SPI', 'SPEI-3', 'RAI']
+
+                st.subheader("📈 Index Time-Series Comparison (Monthly)")
+                fig, ax = plt.subplots(figsize=(16, 6))
+
+                x_idx = range(len(monthly_df))
+                labels = [f"{int(r['year'])}-{int(r['month']):02d}" for _, r in monthly_df.iterrows()]
+
+                ax.plot(x_idx, monthly_df['SPI_mean'], color='#1e88e5', linewidth=1.5, alpha=0.85, label='SPI')
+                ax.plot(x_idx, monthly_df['SPEI_3'], color='#43a047', linewidth=1.5, alpha=0.85, label='SPEI-3')
+                ax.plot(x_idx, monthly_df['RAI'], color='#e53935', linewidth=1.3, linestyle='--', alpha=0.8, label='RAI')
+
+                ax.axhline(0, color='black', linewidth=0.8)
+                ax.axhline(-1.0, color='orange', linestyle=':', alpha=0.8)
+                ax.axhline(-2.0, color='red', linestyle=':', alpha=0.8)
+
+                # X ticks: show label every 12 monsoon months
+                tick_positions = list(range(0, len(monthly_df), 12))
+                ax.set_xticks(tick_positions)
+                ax.set_xticklabels([labels[i] for i in tick_positions], rotation=45, ha='right', fontsize=9)
+
+                ax.set_ylabel("Index Value", fontweight='bold')
+                ax.set_xlabel("Year-Month", fontweight='bold')
+                ax.set_title("SPI vs. SPEI vs. RAI (Monthly JJAS Time-Series — Eastern UP)", fontsize=13, fontweight='bold')
+                ax.grid(linestyle=':', alpha=0.5)
+                ax.legend(loc='lower left')
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close()
+
+                # Correlation Matrix Table
+                st.subheader("📊 Pearson Correlation Matrix (Monthly)")
+                st.dataframe(corr_matrix.style.background_gradient(cmap='coolwarm', vmin=0, vmax=1).format('{:.4f}'), use_container_width=True)
+
+                # Data Table
+                st.subheader("📋 Dual-Index Monthly Comparison Data")
+                display_df = monthly_df[['year', 'month', 'Rainfall_mm', 'SPI_mean', 'SPEI_3', 'RAI']].copy()
+                display_df.columns = ['Year', 'Month', 'Rainfall (mm)', 'SPI (Mean)', 'SPEI-3', 'RAI']
+                display_df['Year'] = display_df['Year'].astype(int)
+                display_df['Month'] = display_df['Month'].astype(int)
+
+                st.dataframe(
+                    display_df.style.format({
+                        'Rainfall (mm)': '{:.1f}',
+                        'SPI (Mean)': '{:+.3f}',
+                        'SPEI-3': '{:+.3f}',
+                        'RAI': '{:+.3f}'
+                    }).background_gradient(subset=['SPI (Mean)', 'SPEI-3', 'RAI'], cmap='RdYlBu', vmin=-2, vmax=2),
+                    use_container_width=True, height=450
+                )
+
+                # Download
+                csv_data = display_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Monthly Index Comparison CSV",
+                    data=csv_data,
+                    file_name='monthly_indices_comparison.csv',
+                    mime='text/csv'
+                )
+
         except Exception as e:
-            st.error(f"Error computing RAI: {e}")
-            st.info("Ensure `data/processed_features.csv` exists and contains correct columns.")
+            st.error(f"Error computing indices comparison: {e}")
+            st.info("Ensure the dataset and pipeline output tables exist in your workspace.")
+
 
 
