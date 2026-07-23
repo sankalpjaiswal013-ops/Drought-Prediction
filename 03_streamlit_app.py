@@ -47,7 +47,8 @@ st.sidebar.markdown(f"""
 
 tab_selection = st.sidebar.radio(
     "Navigation",
-    ["Overview & Data", "Spatial Map", "Model Comparison", "Prediction Plots", "Model Interpretation", "Decision Summary", "Live Predictor", "Future Forecast", "Forecast Percentage"]
+    ["Overview & Data", "Spatial Map", "Model Comparison", "Prediction Plots", "Model Interpretation",
+     "Decision Summary", "Live Predictor", "Future Forecast", "Forecast Percentage", "SPEI Analysis"]
 )
 
 if data_loaded:
@@ -551,3 +552,281 @@ if data_loaded:
         except Exception as e:
             st.error(f"Error calculating percentages: {e}")
             st.info("Make sure you have run the data preprocessing and forecast scripts.")
+
+    # ---------------------------------------------------------
+    # Tab 10: SPEI Analysis
+    # ---------------------------------------------------------
+    elif tab_selection == "SPEI Analysis":
+        st.title("🌿 Standardized Precipitation Evapotranspiration Index (SPEI)")
+        st.markdown("""
+        **SPEI** improves on SPI by accounting for both **precipitation deficit** and 
+        **evapotranspiration demand** (driven by temperature). It captures the 
+        *atmospheric water demand* side of drought — especially important as temperatures rise.
+
+        > **Formula:** `SPEI = f(P − PET)`  
+        > where **PET** is estimated via the **Thornthwaite method** using monthly mean temperature,  
+        > and the water balance **(P − PET)** is standardised using a **log-logistic distribution**.
+        """)
+
+        with st.spinner("Computing SPEI from historical data..."):
+            try:
+                import scipy.stats as stats
+
+                # ── Step 1: Aggregate weekly → monthly ──────────────────────
+                df_spei = df.copy()
+                df_spei['year']  = df_spei['time'].dt.year
+                df_spei['month'] = df_spei['time'].dt.month
+                df_spei['day_count'] = df_spei['time'].dt.days_in_month  # for days-weighted PET
+
+                monthly = df_spei.groupby(['year', 'month']).agg(
+                    Rainfall_mm=('Rainfall', 'sum'),
+                    MaxTemp_C=('Max_Temp', 'mean'),
+                ).reset_index()
+                monthly = monthly.sort_values(['year', 'month']).reset_index(drop=True)
+
+                # ── Step 2: Thornthwaite PET ─────────────────────────────────
+                # PET_monthly (mm) = 16 * (10 * T / I) ^ a  *  (N/12) * (days/30)
+                # I = heat index = sum over 12 months of (T_i / 5)^1.514
+                # a = 6.75e-7 * I^3 - 7.71e-5 * I^2 + 1.792e-2 * I + 0.49239
+
+                def thornthwaite_pet(monthly_df):
+                    """Compute monthly PET (mm) using the Thornthwaite method."""
+                    # Monthly climatological mean temperature
+                    clim = monthly_df.groupby('month')['MaxTemp_C'].mean()
+                    # Subtract ~5°C to convert max→mean (rough correction for India)
+                    clim_mean = (clim - 5.0).clip(lower=0)
+
+                    # Heat index I
+                    I = ((clim_mean / 5.0) ** 1.514).sum()
+                    a = 6.75e-7 * I**3 - 7.71e-5 * I**2 + 1.792e-2 * I + 0.49239
+
+                    pet_list = []
+                    for _, row in monthly_df.iterrows():
+                        T = max(row['MaxTemp_C'] - 5.0, 0)  # approx mean temp
+                        # Days in month (approximate)
+                        days = 30
+                        if row['month'] in [1, 3, 5, 7, 8, 10, 12]: days = 31
+                        elif row['month'] == 2: days = 28
+                        if I > 0 and T > 0:
+                            pet = 16 * ((10 * T / I) ** a) * (days / 30)
+                        else:
+                            pet = 0.0
+                        pet_list.append(pet)
+                    return pet_list
+
+                monthly['PET_mm'] = thornthwaite_pet(monthly)
+
+                # ── Step 3: Water balance D = P − PET ────────────────────────
+                monthly['D'] = monthly['Rainfall_mm'] - monthly['PET_mm']
+
+                # ── Step 4: Accumulate over 3-month window (SPEI-3) ──────────
+                monthly['D_acc3'] = monthly['D'].rolling(window=3, min_periods=3).sum()
+                monthly = monthly.dropna(subset=['D_acc3']).reset_index(drop=True)
+
+                # ── Step 5: Fit log-logistic distribution per calendar month ─
+                spei_vals = []
+                for idx, row in monthly.iterrows():
+                    m = row['month']
+                    same_month = monthly[monthly['month'] == m]['D_acc3'].values
+                    # Shift to positive domain for log-logistic
+                    shift = same_month.min() - 0.001
+                    shifted = same_month - shift
+                    try:
+                        # Fit log-logistic (fisk distribution in scipy)
+                        c, loc, scale = stats.fisk.fit(shifted, floc=0)
+                        p = stats.fisk.cdf(row['D_acc3'] - shift, c, loc, scale)
+                        # Avoid p=0 or p=1
+                        p = np.clip(p, 0.001, 0.999)
+                        spei = stats.norm.ppf(p)
+                    except Exception:
+                        spei = np.nan
+                    spei_vals.append(spei)
+
+                monthly['SPEI_3'] = spei_vals
+                monthly['date'] = pd.to_datetime(
+                    monthly['year'].astype(str) + '-' + monthly['month'].astype(str).str.zfill(2) + '-01'
+                )
+
+                # ── Step 6: Drought classification ───────────────────────────
+                def classify_spei(v):
+                    if   v >=  2.0: return "Extremely Wet"
+                    elif v >=  1.5: return "Very Wet"
+                    elif v >=  1.0: return "Moderately Wet"
+                    elif v >= -1.0: return "Near Normal"
+                    elif v >= -1.5: return "Mild Drought"
+                    elif v >= -2.0: return "Moderate Drought"
+                    else:           return "Severe Drought"
+
+                def color_spei(v):
+                    if   v >=  1.5: return "background-color:#1a6fc4; color:white"
+                    elif v >=  1.0: return "background-color:#5aadff; color:black"
+                    elif v >= -1.0: return "background-color:#e8f5e9; color:black"
+                    elif v >= -1.5: return "background-color:#ffe082; color:black"
+                    elif v >= -2.0: return "background-color:#ff8a65; color:black"
+                    else:           return "background-color:#b71c1c; color:white"
+
+                monthly['Classification'] = monthly['SPEI_3'].apply(classify_spei)
+
+                # ─────────────────────────────────────────────────────────────
+                # LAYOUT
+                # ─────────────────────────────────────────────────────────────
+
+                # ── KPI strip ────────────────────────────────────────────────
+                k1, k2, k3, k4 = st.columns(4)
+                drought_months = (monthly['SPEI_3'] < -1.0).sum()
+                severe_months  = (monthly['SPEI_3'] < -2.0).sum()
+                min_spei = monthly['SPEI_3'].min()
+                mean_spei = monthly['SPEI_3'].mean()
+                worst_month = monthly.loc[monthly['SPEI_3'].idxmin()]
+
+                k1.metric("Total Drought Months (SPEI < −1)", int(drought_months))
+                k2.metric("Severe Drought Months (SPEI < −2)", int(severe_months))
+                k3.metric("Lowest SPEI-3 Ever", f"{min_spei:.2f}",
+                          f"{worst_month['year']:.0f}-{int(worst_month['month']):02d}")
+                k4.metric("Mean SPEI-3 (All-time)", f"{mean_spei:.3f}")
+
+                st.markdown("---")
+
+                # ── Year-range filter ────────────────────────────────────────
+                yr_min = int(monthly['year'].min())
+                yr_max = int(monthly['year'].max())
+                col_sl1, col_sl2 = st.columns(2)
+                with col_sl1:
+                    yr_start = st.slider("Start Year", yr_min, yr_max - 1, yr_min, key="spei_yr_start")
+                with col_sl2:
+                    yr_end   = st.slider("End Year",   yr_start + 1, yr_max, yr_max, key="spei_yr_end")
+
+                plot_df = monthly[(monthly['year'] >= yr_start) & (monthly['year'] <= yr_end)].copy()
+
+                # ── Chart ─────────────────────────────────────────────────────
+                st.subheader("📈 SPEI-3 Time-Series Chart")
+                fig, ax = plt.subplots(figsize=(16, 5))
+
+                x = range(len(plot_df))
+                spei_arr = plot_df['SPEI_3'].values
+                labels   = [f"{int(r['year'])}-{int(r['month']):02d}" for _, r in plot_df.iterrows()]
+
+                # Shaded bands
+                ax.fill_between(x, spei_arr, 0,
+                                where=(spei_arr > 0), color='#4fc3f7', alpha=0.45, label='Wet (SPEI > 0)')
+                ax.fill_between(x, spei_arr, 0,
+                                where=(spei_arr < 0), color='#ef9a9a', alpha=0.45, label='Dry (SPEI < 0)')
+
+                # Drought threshold lines
+                ax.axhline(-1.0, color='orange',   lw=1.2, ls='--', label='Mild Drought (−1.0)')
+                ax.axhline(-2.0, color='red',       lw=1.2, ls='--', label='Severe Drought (−2.0)')
+                ax.axhline( 1.0, color='steelblue', lw=1.0, ls=':',  label='Moderately Wet (+1.0)')
+
+                # SPEI line
+                ax.plot(x, spei_arr, color='#212121', lw=1.4, zorder=3)
+                ax.axhline(0, color='black', lw=0.7)
+
+                # X-axis ticks: show every 12th month label
+                tick_positions = list(range(0, len(plot_df), 12))
+                ax.set_xticks(tick_positions)
+                ax.set_xticklabels([labels[i] for i in tick_positions], rotation=45, ha='right', fontsize=9)
+
+                ax.set_ylabel("SPEI-3 Value", fontsize=12, fontweight='bold')
+                ax.set_xlabel("Year-Month", fontsize=11)
+                ax.set_title(
+                    f"SPEI-3 (Standardized Precipitation Evapotranspiration Index) — "
+                    f"Eastern UP ({yr_start}–{yr_end})",
+                    fontsize=13, fontweight='bold'
+                )
+                ax.legend(loc='upper right', fontsize=9)
+                ax.grid(axis='y', linestyle=':', alpha=0.5)
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close()
+
+                # ── Yearly summary bar chart ──────────────────────────────────
+                st.subheader("📊 Yearly Mean SPEI-3")
+                yearly_spei = (
+                    plot_df.groupby('year')['SPEI_3']
+                    .mean()
+                    .reset_index()
+                    .rename(columns={'SPEI_3': 'Mean_SPEI3'})
+                )
+
+                fig2, ax2 = plt.subplots(figsize=(14, 4))
+                colors = ['#1565c0' if v >= 0 else '#c62828' for v in yearly_spei['Mean_SPEI3']]
+                bars = ax2.bar(yearly_spei['year'].astype(int), yearly_spei['Mean_SPEI3'],
+                               color=colors, edgecolor='white', width=0.7)
+                for bar, val in zip(bars, yearly_spei['Mean_SPEI3']):
+                    ax2.text(bar.get_x() + bar.get_width()/2,
+                             bar.get_height() + (0.03 if val >= 0 else -0.12),
+                             f"{val:.2f}", ha='center', va='bottom', fontsize=7, fontweight='bold',
+                             color='white' if val < -0.8 else 'black')
+                ax2.axhline(-1.0, color='orange', lw=1.2, ls='--', label='Mild Drought threshold')
+                ax2.axhline(0,    color='black',  lw=0.7)
+                ax2.set_xlabel("Year", fontweight='bold')
+                ax2.set_ylabel("Mean SPEI-3", fontweight='bold')
+                ax2.set_title("Annual Mean SPEI-3 (Eastern UP)", fontweight='bold')
+                ax2.legend(fontsize=9)
+                ax2.grid(axis='y', linestyle=':', alpha=0.4)
+                plt.tight_layout()
+                st.pyplot(fig2)
+                plt.close()
+
+                # ── Data Table ────────────────────────────────────────────────
+                st.subheader("📋 Monthly SPEI-3 Data Table")
+
+                display_cols = ['year', 'month', 'Rainfall_mm', 'PET_mm', 'D', 'D_acc3', 'SPEI_3', 'Classification']
+                table_df = plot_df[display_cols].copy()
+                table_df.columns = ['Year', 'Month', 'Rainfall (mm)', 'PET (mm)',
+                                    'Water Balance (P−PET)', 'Acc. Balance (3-mo)',
+                                    'SPEI-3', 'Classification']
+                table_df['Year']  = table_df['Year'].astype(int)
+                table_df['Month'] = table_df['Month'].astype(int)
+
+                def style_row(row):
+                    spei_val = row['SPEI-3']
+                    bg = color_spei(spei_val)
+                    return ['' if col != 'Classification' else bg for col in row.index]
+
+                styled = (
+                    table_df.style
+                    .apply(style_row, axis=1)
+                    .format({
+                        'Rainfall (mm)':          '{:.1f}',
+                        'PET (mm)':               '{:.1f}',
+                        'Water Balance (P−PET)':  '{:+.1f}',
+                        'Acc. Balance (3-mo)':    '{:+.1f}',
+                        'SPEI-3':                 '{:+.3f}',
+                    })
+                    .background_gradient(subset=['SPEI-3'], cmap='RdYlBu', vmin=-3, vmax=3)
+                )
+                st.dataframe(styled, use_container_width=True, height=420)
+
+                # ── Download button ───────────────────────────────────────────
+                csv_spei = table_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download SPEI-3 Data as CSV",
+                    data=csv_spei,
+                    file_name='spei3_monthly.csv',
+                    mime='text/csv'
+                )
+
+                # ── Interpretation guide ──────────────────────────────────────
+                st.markdown("---")
+                st.markdown("""
+                ### 📖 SPEI Classification Guide
+                | SPEI Value | Classification | Colour |
+                |:----------:|:--------------|:------:|
+                | ≥ +2.0 | Extremely Wet | 🔵 Dark Blue |
+                | +1.5 to +2.0 | Very Wet | 🔵 Blue |
+                | +1.0 to +1.5 | Moderately Wet | 🩵 Light Blue |
+                | −1.0 to +1.0 | Near Normal | ⬜ White/Green |
+                | −1.5 to −1.0 | **Mild Drought** | 🟡 Yellow |
+                | −2.0 to −1.5 | **Moderate Drought** | 🟠 Orange |
+                | < −2.0 | **Severe Drought** | 🔴 Dark Red |
+
+                > **Note:** PET is estimated via the **Thornthwaite method** using monthly mean temperature  
+                > (max temp − 5 °C correction for India). For higher accuracy, actual ET data from  
+                > GLEAM or ERA5-Land reanalysis is recommended.
+                """)
+
+            except Exception as e:
+                st.error(f"Error computing SPEI: {e}")
+                st.info("Ensure `data/processed_features.csv` exists and contains Rainfall, Max_Temp, and time columns.")
+
